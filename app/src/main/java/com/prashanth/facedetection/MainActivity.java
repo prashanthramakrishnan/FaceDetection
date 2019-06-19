@@ -1,29 +1,22 @@
 package com.prashanth.facedetection;
 
 import android.Manifest;
+import android.annotation.SuppressLint;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
-import android.graphics.Canvas;
-import android.graphics.Color;
-import android.graphics.Matrix;
-import android.graphics.Paint;
-import android.graphics.PointF;
+import android.graphics.BitmapFactory;
 import android.graphics.Rect;
-import android.media.Image;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.Environment;
-import android.util.Log;
 import android.view.View;
 import android.widget.Button;
-import android.widget.ImageView;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.lifecycle.LifecycleOwner;
-import butterknife.BindView;
-import com.google.android.gms.tasks.OnSuccessListener;
-
+import com.google.android.gms.tasks.OnCompleteListener;
+import com.google.android.gms.tasks.Task;
 import com.google.firebase.FirebaseApp;
 import com.google.firebase.ml.vision.FirebaseVision;
 import com.google.firebase.ml.vision.common.FirebaseVisionImage;
@@ -33,32 +26,42 @@ import com.google.firebase.ml.vision.face.FirebaseVisionFace;
 import com.google.firebase.ml.vision.face.FirebaseVisionFaceContour;
 import com.google.firebase.ml.vision.face.FirebaseVisionFaceDetector;
 import com.google.firebase.ml.vision.face.FirebaseVisionFaceDetectorOptions;
+import com.otaliastudios.cameraview.CameraListener;
 import com.otaliastudios.cameraview.CameraView;
 import com.otaliastudios.cameraview.Facing;
 import com.otaliastudios.cameraview.Frame;
 import com.otaliastudios.cameraview.FrameProcessor;
-import java.io.File;
+import java.io.Closeable;
+import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.util.List;
 import timber.log.Timber;
 
-public class MainActivity extends AppCompatActivity implements FrameProcessor, LifecycleOwner {
+public class MainActivity extends AppCompatActivity implements FrameProcessor, LifecycleOwner, Closeable {
 
     private CameraView view;
 
     private View overlayView;
 
+    private Button snapButton;
+
+    private Rect overlayRect;
+
+    private FirebaseVisionFaceDetector faceDetector;
+
+    private static String IMG_NAME = "face.png";
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        snapButton = findViewById(R.id.snap_button);
         view = findViewById(R.id.face_detection_camera_view);
         overlayView = findViewById(R.id.overlay);
-
-        Button snapButton = findViewById(R.id.snap_button);
+        disableButton();
         snapButton.setOnClickListener(v -> {
-            //TODO
-            //Snap the photo  and crop the face and send it to the next screen
+            view.capturePicture();
         });
 
         if (hasCameraPermission()) {
@@ -66,13 +69,13 @@ public class MainActivity extends AppCompatActivity implements FrameProcessor, L
             view.setFacing(Facing.FRONT);
             view.setLifecycleOwner(this);
             view.addFrameProcessor(this);
-
+            view.addCameraListener(new CameraClickOnPictureTakenListener());
         }
 
         overlayView.post(() -> {
-            Rect rect = new Rect();
-            overlayView.getGlobalVisibleRect(rect);
-            Timber.d("Visible rect %s ", rect.toString());
+            overlayRect = new Rect();
+            overlayView.getGlobalVisibleRect(overlayRect);
+            Timber.d("Visible rect %s ", overlayRect.toString());
         });
     }
 
@@ -126,71 +129,117 @@ public class MainActivity extends AppCompatActivity implements FrameProcessor, L
 
     @Override
     public void process(@NonNull Frame frame) {
+        if (frame.getSize() != null) {
+            int height = frame.getSize().getHeight();
+            int width = frame.getSize().getWidth();
 
-        int height = frame.getSize().getHeight();
-        int width = frame.getSize().getWidth();
+            FirebaseVisionImageMetadata metadata = new FirebaseVisionImageMetadata.Builder()
+                    .setWidth(width)
+                    .setHeight(height)
+                    .setFormat(FirebaseVisionImageMetadata.IMAGE_FORMAT_NV21)
+                    .setRotation(FirebaseVisionImageMetadata.ROTATION_270)
+                    .build();
 
-        FirebaseVisionImageMetadata metadata = new FirebaseVisionImageMetadata.Builder()
-                .setWidth(width)
-                .setHeight(height)
-                .setFormat(FirebaseVisionImageMetadata.IMAGE_FORMAT_NV21)
-                .setRotation(FirebaseVisionImageMetadata.ROTATION_270)
-                .build();
+            FirebaseVisionImage firebaseVisionImage = FirebaseVisionImage.fromByteArray(frame.getData(), metadata);
 
-        FirebaseVisionImage firebaseVisionImage = FirebaseVisionImage.fromByteArray(frame.getData(), metadata);
+            FirebaseVisionFaceDetectorOptions options = new FirebaseVisionFaceDetectorOptions.Builder()
+                    .setContourMode(FirebaseVisionFaceDetectorOptions.ALL_CONTOURS)
+                    .setPerformanceMode(FirebaseVisionFaceDetectorOptions.ACCURATE)
+                    .setLandmarkMode(FirebaseVisionFaceDetectorOptions.ALL_LANDMARKS)
+                    .build();
 
-        FirebaseVisionFaceDetectorOptions options = new FirebaseVisionFaceDetectorOptions.Builder()
-                .setContourMode(FirebaseVisionFaceDetectorOptions.ALL_CONTOURS)
-                .setPerformanceMode(FirebaseVisionFaceDetectorOptions.ACCURATE)
-                .setLandmarkMode(FirebaseVisionFaceDetectorOptions.ALL_LANDMARKS)
-                .build();
+            faceDetector = FirebaseVision.getInstance().getVisionFaceDetector(options);
 
-        FirebaseVisionFaceDetector faceDetector = FirebaseVision.getInstance().getVisionFaceDetector(options);
+            faceDetector.detectInImage(firebaseVisionImage)
+                    .addOnSuccessListener(firebaseVisionFaces -> {
+                        if (firebaseVisionFaces.isEmpty()) {
+                            disableButton();
+                        }
 
-        faceDetector.detectInImage(firebaseVisionImage)
-                .addOnSuccessListener(firebaseVisionFaces -> {
-                    Timber.d("Face detection successful  number %s", firebaseVisionFaces.size());
-//                    TODO identify if the photo is in the bounds of the overlay if yes enable the button and on click; store the bitmap and show it in the next screen
+                        for (FirebaseVisionFace face : firebaseVisionFaces) {
+                            Rect rect = new Rect();
+                            rect.set(face.getBoundingBox().left, (int) (face.getBoundingBox().top * 1.5), face.getBoundingBox().right,
+                                    face.getBoundingBox().bottom);
 
-                    Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-
-                    for (FirebaseVisionFace face : firebaseVisionFaces) {
-                        List<FirebaseVisionPoint> faceContours = face.getContour(FirebaseVisionFaceContour.FACE).getPoints();
-
-                        for (int i = 0; i < faceContours.size(); i++) {
-                            Timber.d("Rect for the face found: %s", face.getBoundingBox().toString());
-                            //TODO - Crop the photo and handle it accordingly
-
-                            int x = face.getBoundingBox().centerX();
-                            int y = face.getBoundingBox().centerY();
-
-                            Bitmap bm = Bitmap.createBitmap(bitmap, 0, 0,
-                                    face.getBoundingBox().height(),
-                                    face.getBoundingBox().width());
-
-                            //TODO - Doesn't seem to work yet, blank photo is displayed
-                            String filename = "face.png";
-                            File sd = Environment.getExternalStorageDirectory();
-                            File dest = new File(sd, filename);
-                            try {
-                                //TODO once file is saved - finish this and start ShowFaceActivity through an intent
-                                //Maybe encrypt the file for security purposes or keep the file in memory?
-                                Timber.d("Saving file");
-                                FileOutputStream out = new FileOutputStream(dest);
-                                bm.compress(Bitmap.CompressFormat.PNG, 90, out);
-                                out.flush();
-                                out.close();
-                            } catch (Exception e) {
-                                e.printStackTrace();
+                            if (overlayRect.contains(rect)) {
+                                enableButton();
+                            } else {
+                                disableButton();
                             }
                         }
-                    }
 
-                })
-                .addOnFailureListener(e -> {
-                    //TODO handle error - show an alert box
-                    Timber.d("Face detection unsuccessful");
-                });
+                    })
+                    .addOnFailureListener(e -> {
+                        Timber.d("Face detection unsuccessful");
+                        disableButton();
+                    });
+        }
 
+    }
+
+    @Override
+    public void close() throws IOException {
+        faceDetector.close();
+        view.removeFrameProcessor(this);
+    }
+
+    private class CameraClickOnPictureTakenListener extends CameraListener {
+
+        @SuppressLint("WrongThread")
+        @Override
+        public void onPictureTaken(byte[] jpeg) {
+            super.onPictureTaken(jpeg);
+            try {
+                faceDetector.close();
+            } catch (IOException e) {
+                Timber.e(e, "Error closing facedetector");
+            }
+            Bitmap bitmap = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length);
+            Bitmap croppedBitmap = Bitmap.createBitmap(bitmap, overlayView.getTop(), overlayView.getRight(), (int) (overlayView.getHeight() * 1.5),
+                    (int) (overlayView.getWidth() * 1.5));
+            FileOutputStream fos;
+            try {
+                fos = MainActivity.this.openFileOutput(IMG_NAME, Context.MODE_PRIVATE);
+                croppedBitmap.compress(Bitmap.CompressFormat.PNG, 100, fos);
+                fos.close();
+            } catch (FileNotFoundException e) {
+                Timber.e(e, "file not found");
+            } catch (IOException e) {
+                Timber.e(e, "Can't save file");
+            }
+
+            Intent intent = new Intent(MainActivity.this, ShowFaceActivity.class);
+            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK);
+            intent.putExtra("IMAGE", IMG_NAME);
+            startActivity(intent);
+            finish();
+
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (faceDetector != null) {
+            try {
+                Timber.d("Face detector closed");
+                view.removeFrameProcessor(this);
+                faceDetector.close();
+            } catch (IOException e) {
+                Timber.e(e, "Exception closing detector");
+            }
+        }
+    }
+
+    private void enableButton() {
+        if (!snapButton.isEnabled()) {
+            snapButton.setEnabled(true);
+        }
+    }
+
+    private void disableButton() {
+        if (snapButton.isEnabled()) {
+            snapButton.setEnabled(false);
+        }
     }
 }

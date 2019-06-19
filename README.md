@@ -5,15 +5,11 @@ FaceDetection
 
 **Features**
 - Uses FirebaseMLKit for face detection
-- Register your app on Firebase and add the google-services.json file
+- Register your app on Firebase console and add the google-services.json file to run the application
 
-**TODO**
-- Identify when the face is in the overlay, enable the snap button, face detection right now is on the whole camera frame rather than the overlay
-- Crop the image within the overlay
-- Show the cropped image in a new screen
-- Inject views using butterknife
-- Unit tests and instrumentation tests
-- Mention list of open sources used
+**Open source libaries used**
+- **[CameraView](https://github.com/natario1/CameraView)**
+- **[Timber](https://github.com/JakeWharton/timber)**
 
 ### License
 
