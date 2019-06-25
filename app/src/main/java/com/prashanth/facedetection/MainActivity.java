@@ -7,6 +7,7 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.os.Build;
 import android.os.Bundle;
@@ -15,15 +16,10 @@ import android.widget.Button;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.lifecycle.LifecycleOwner;
-import com.google.android.gms.tasks.OnCompleteListener;
-import com.google.android.gms.tasks.Task;
-import com.google.firebase.FirebaseApp;
 import com.google.firebase.ml.vision.FirebaseVision;
 import com.google.firebase.ml.vision.common.FirebaseVisionImage;
 import com.google.firebase.ml.vision.common.FirebaseVisionImageMetadata;
-import com.google.firebase.ml.vision.common.FirebaseVisionPoint;
 import com.google.firebase.ml.vision.face.FirebaseVisionFace;
-import com.google.firebase.ml.vision.face.FirebaseVisionFaceContour;
 import com.google.firebase.ml.vision.face.FirebaseVisionFaceDetector;
 import com.google.firebase.ml.vision.face.FirebaseVisionFaceDetectorOptions;
 import com.otaliastudios.cameraview.CameraListener;
@@ -35,7 +31,6 @@ import java.io.Closeable;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.util.List;
 import timber.log.Timber;
 
 public class MainActivity extends AppCompatActivity implements FrameProcessor, LifecycleOwner, Closeable {
@@ -194,9 +189,11 @@ public class MainActivity extends AppCompatActivity implements FrameProcessor, L
             } catch (IOException e) {
                 Timber.e(e, "Error closing facedetector");
             }
+            Matrix matrix = new Matrix();
+            matrix.preScale(-1F, 1F);
             Bitmap bitmap = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length);
             Bitmap croppedBitmap = Bitmap.createBitmap(bitmap, overlayView.getTop(), overlayView.getRight(), (int) (overlayView.getHeight() * 1.5),
-                    (int) (overlayView.getWidth() * 1.5));
+                    (int) (overlayView.getWidth() * 1.5), matrix, true);
             FileOutputStream fos;
             try {
                 fos = MainActivity.this.openFileOutput(IMG_NAME, Context.MODE_PRIVATE);
