@@ -6,6 +6,7 @@ FaceDetection
 **Features**
 - Uses FirebaseMLKit for face detection
 - Register your app on Firebase console and add the google-services.json file to run the application
+- Tested on Motorola G4 running on Android 7.0 (Android security patch level April 1, 2018)
 
 **Open source libaries used**
 - **[CameraView](https://github.com/natario1/CameraView)**
